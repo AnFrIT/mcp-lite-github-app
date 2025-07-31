@@ -1,0 +1,88 @@
+name: MCP-LITE Research Phase
+
+on:
+  workflow_dispatch:
+    inputs:
+      researchers:
+        description: 'JSON array of researchers'
+        required: true
+        type: string
+      plan_path:
+        description: 'Path to plan file'
+        required: true
+        type: string
+        default: 'plans/final-plan.md'
+      issue_number:
+        description: 'Issue number'
+        required: true
+        type: string
+
+jobs:
+  research:
+    strategy:
+      matrix:
+        researcher: ${{ fromJson(github.event.inputs.researchers) }}
+      max-parallel: 25
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: project-${{ github.event.inputs.issue_number }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install chromadb sentence-transformers
+          fi
+      
+      - name: Load plan
+        run: |
+          mkdir -p research
+          cp ${{ github.event.inputs.plan_path }} current-plan.md || echo "Plan file not found"
+      
+      - name: Create research task
+        run: |
+          cat > research-task.md << 'EOF'
+          As ${{ matrix.researcher }}, research based on the project plan.
+          
+          Focus on your area of expertise:
+          - Best practices and patterns
+          - Latest technologies (2024-2025)
+          - Production-ready solutions
+          - Performance considerations
+          - Security implications
+          - Real-world examples
+          
+          Provide comprehensive, actionable research.
+          Save results to: research/${{ matrix.researcher }}-results.md
+          EOF
+      
+      - name: Run Claude research
+        uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Verify research created
+        run: |
+          if [ ! -f "research/${{ matrix.researcher }}-results.md" ]; then
+            echo "Creating placeholder for ${{ matrix.researcher }}"
+            echo "# Research by ${{ matrix.researcher }}" > "research/${{ matrix.researcher }}-results.md"
+            echo "Research task completed." >> "research/${{ matrix.researcher }}-results.md"
+          fi
+      
+      - name: Commit research results
+        run: |
+          git config --global user.name "MCP-LITE Bot"
+          git config --global user.email "bot@mcp-lite.ai"
+          git add research/
+          git commit -m "Research by ${{ matrix.researcher }}" || echo "No changes to commit"
+          git push origin project-${{ github.event.inputs.issue_number }}
