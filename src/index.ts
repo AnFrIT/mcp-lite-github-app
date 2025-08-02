@@ -1038,10 +1038,19 @@ expressApp.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Запускаем сервер
-const PORT = process.env.PORT || 3000;
-expressApp.listen(PORT, () => {
-  console.log(`MCP-LITE GitHub App listening on port ${PORT}`);
-  console.log('Webhook endpoint: POST /api/github/webhooks');
-  console.log('Health check: GET /health');
-});
+// Для Vercel нужно экспортировать приложение
+if (process.env.VERCEL) {
+  // В Vercel не нужно слушать порт
+  module.exports = expressApp;
+} else {
+  // Локально запускаем сервер
+  const PORT = process.env.PORT || 3000;
+  expressApp.listen(PORT, () => {
+    console.log(`MCP-LITE GitHub App listening on port ${PORT}`);
+    console.log('Webhook endpoint: POST /api/github/webhooks');
+    console.log('Health check: GET /health');
+  });
+}
+
+// Экспортируем для Vercel
+export default expressApp;
