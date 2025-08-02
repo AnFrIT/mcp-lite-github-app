@@ -1,6 +1,6 @@
 {
   "name": "mcp-lite-github-app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GitHub App for MCP-LITE V2.5 automation",
   "main": "dist/index.js",
   "scripts": {
