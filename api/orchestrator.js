@@ -110,62 +110,100 @@ Rate from 0-100 and return JSON: {"score": NUMBER, "issues": []}`;
   }
   
   async phase2_research(plan) {
-    console.log('Starting research phase');
+    console.log('Starting parallel research phase');
     
-    // Create research tasks
-    const researchResults = {};
+    // Save plan for GitHub Actions
+    await this.saveToRepo(
+      'plans/final-plan.json',
+      JSON.stringify(plan, null, 2),
+      'Save plan for research phase'
+    );
     
-    for (const researcher of plan.researchers || ['web-technology-researcher']) {
-      const researchPrompt = `As ${researcher}, research based on this plan:
-        
-${JSON.stringify(plan, null, 2)}
-        
-Find best practices, code examples, and recommendations.
-Return results as JSON.`;
-      
-      const result = await this.callClaude(researchPrompt);
-      researchResults[researcher] = JSON.parse(result);
-    }
-    
-    // Verify research quality
-    let researchQuality = 0;
-    let iteration = 0;
-    
-    while (researchQuality < 95 && iteration < 3) {
-      const verifyPrompt = `As verification-coordinator, verify this research:
-        
-${JSON.stringify(researchResults, null, 2)}
-        
-Return JSON: {"score": NUMBER, "improvements": []}`;
-      
-      const verification = await this.callClaude(verifyPrompt);
-      
-      try {
-        const result = JSON.parse(verification);
-        researchQuality = result.score || 0;
-        
-        if (researchQuality < 95 && result.improvements) {
-          // Apply improvements
-          for (const improvement of result.improvements) {
-            if (improvement.researcher && improvement.suggestion) {
-              const improvePrompt = `As ${improvement.researcher}, improve your research:
-${improvement.suggestion}
-Return improved research as JSON.`;
-              
-              researchResults[improvement.researcher] = JSON.parse(
-                await this.callClaude(improvePrompt)
-              );
-            }
+    try {
+      // Trigger GitHub Actions workflow for parallel research
+      const { data: workflow } = await this.octokit.request(
+        'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: 'research.yml',
+          ref: this.projectBranch,
+          inputs: {
+            researchers: JSON.stringify(plan.researchers || ['web-technology-researcher']),
+            plan_path: 'plans/final-plan.json',
+            issue_number: String(this.issueNumber)
           }
         }
-      } catch (e) {
-        researchQuality = 0;
+      );
+      
+      await this.updateIssue('🔬 Triggered parallel research workflow');
+      
+      // Wait for workflow to complete
+      await this.waitForWorkflowCompletion('research');
+      
+      // Collect research results from artifacts
+      const researchResults = await this.collectWorkflowArtifacts('research');
+      
+      // Verify research quality with iterations
+      let researchQuality = 0;
+      let iteration = 0;
+      
+      while (researchQuality < 95 && iteration < 3) {
+        const verifyPrompt = `As verification-coordinator, verify this research:
+          
+${JSON.stringify(researchResults, null, 2)}
+          
+Return JSON: {"score": NUMBER, "improvements": []}`;
+        
+        const verification = await this.callClaude(verifyPrompt);
+        
+        try {
+          const result = JSON.parse(verification);
+          researchQuality = result.score || 0;
+          
+          if (researchQuality < 95 && result.improvements) {
+            await this.updateIssue(`🔄 Research quality: ${researchQuality}%, applying improvements...`);
+            
+            // Re-run specific researchers with improvements
+            for (const improvement of result.improvements) {
+              if (improvement.researcher && improvement.suggestion) {
+                // Trigger single researcher with improvement suggestion
+                await this.triggerSingleResearcher(improvement.researcher, improvement.suggestion);
+              }
+            }
+            
+            // Collect updated results
+            researchResults = await this.collectWorkflowArtifacts('research');
+          }
+        } catch (e) {
+          researchQuality = 0;
+        }
+        
+        iteration++;
       }
       
-      iteration++;
+      return researchResults;
+      
+    } catch (error) {
+      // Fallback to sequential if GitHub Actions not available
+      console.error('GitHub Actions not available, using sequential research:', error);
+      
+      const researchResults = {};
+      
+      for (const researcher of plan.researchers || ['web-technology-researcher']) {
+        const researchPrompt = `As ${researcher}, research based on this plan:
+          
+${JSON.stringify(plan, null, 2)}
+          
+Find best practices, code examples, and recommendations.
+Return results as JSON.`;
+        
+        const result = await this.callClaude(researchPrompt);
+        researchResults[researcher] = JSON.parse(result);
+      }
+      
+      return researchResults;
     }
-    
-    return researchResults;
   }
   
   async phase3_createDevPlan(originalPlan, research) {
@@ -222,33 +260,65 @@ Return improved plan as JSON.`;
   }
   
   async phase4_development(devPlan) {
-    console.log('Starting development phase');
+    console.log('Starting parallel development phase');
     
     // Create project branch
     await this.createBranch(this.projectBranch);
     
-    // Develop each component
-    for (const component of devPlan.components || []) {
-      const devPrompt = `As ${component.developer || 'fullstack-developer'}, implement ${component.name}.
-        
+    // Save development plan for GitHub Actions
+    await this.saveToRepo(
+      'plans/development-plan.json',
+      JSON.stringify(devPlan, null, 2),
+      'Save development plan for parallel execution'
+    );
+    
+    // Trigger GitHub Actions workflow for parallel development
+    try {
+      const { data: workflow } = await this.octokit.request(
+        'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: 'development.yml',
+          ref: this.projectBranch,
+          inputs: {
+            components: JSON.stringify(devPlan.components || []),
+            developers: JSON.stringify(devPlan.developers || []),
+            issue_number: String(this.issueNumber)
+          }
+        }
+      );
+      
+      await this.updateIssue('🚀 Triggered parallel development workflow');
+      
+      // Wait for workflow to complete
+      await this.waitForWorkflowCompletion('development');
+      
+    } catch (error) {
+      // If GitHub Actions is not available, fall back to sequential development
+      console.error('GitHub Actions not available, using sequential development:', error);
+      
+      for (const component of devPlan.components || []) {
+        const devPrompt = `As ${component.developer || 'fullstack-developer'}, implement ${component.name}.
+          
 Use this development plan:
 ${JSON.stringify(component, null, 2)}
-        
+          
 Requirements:
-- Production-ready code
+- Production-ready code  
 - No placeholders
 - Comprehensive error handling
 - Tests included
-        
+          
 Create all necessary files.`;
-      
-      await this.callClaudeWithFiles(devPrompt, this.projectBranch);
-      
-      // Commit component
-      await this.commitChanges(
-        `Implement ${component.name} component`,
-        this.projectBranch
-      );
+        
+        await this.callClaudeWithFiles(devPrompt, this.projectBranch);
+        
+        await this.commitChanges(
+          `Implement ${component.name} component`,
+          this.projectBranch
+        );
+      }
     }
   }
   
@@ -343,22 +413,49 @@ Format as professional documentation.`;
   }
   
   async callClaude(prompt) {
-    // Use Claude Code OAuth token to call Claude
-    // This is a simplified version - in production would use proper SDK
-    const response = await execAsync(`claude "${prompt.replace(/"/g, '\\"')}"`, {
-      env: {
-        ...process.env,
-        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN
-      }
-    });
+    // Execute Claude command with OAuth token
+    const sanitizedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    const command = `claude "${sanitizedPrompt}"`;
     
-    return response.stdout;
+    try {
+      const { stdout, stderr } = await execAsync(command, {
+        env: {
+          ...process.env,
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN
+        },
+        maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large responses
+      });
+      
+      if (stderr) {
+        console.error('Claude stderr:', stderr);
+      }
+      
+      return stdout.trim();
+    } catch (error) {
+      console.error('Error calling Claude:', error);
+      throw new Error(`Claude execution failed: ${error.message}`);
+    }
   }
   
   async callClaudeWithFiles(prompt, branch) {
-    // Switch to branch and call Claude
-    await execAsync(`git checkout ${branch}`);
-    return await this.callClaude(prompt);
+    try {
+      // Save current branch
+      const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD');
+      
+      // Switch to target branch
+      await execAsync(`git checkout ${branch}`);
+      
+      // Call Claude in the context of this branch
+      const result = await this.callClaude(prompt);
+      
+      // Switch back to original branch
+      await execAsync(`git checkout ${currentBranch.trim()}`);
+      
+      return result;
+    } catch (error) {
+      console.error('Error in callClaudeWithFiles:', error);
+      throw error;
+    }
   }
   
   async saveToRepo(filePath, content, message) {
@@ -421,8 +518,31 @@ Format as professional documentation.`;
   
   async commitChanges(message, branch) {
     try {
-      // This would be done through git commands in real implementation
-      console.log(`Committing: ${message} to ${branch}`);
+      // Configure git
+      await execAsync('git config --global user.name "MCP-LITE Bot"');
+      await execAsync('git config --global user.email "bot@mcp-lite.ai"');
+      
+      // Make sure we're on the right branch
+      await execAsync(`git checkout ${branch}`);
+      
+      // Add all changes
+      await execAsync('git add -A');
+      
+      // Check if there are changes to commit
+      const { stdout: status } = await execAsync('git status --porcelain');
+      
+      if (status.trim()) {
+        // Commit changes
+        const sanitizedMessage = message.replace(/"/g, '\\"');
+        await execAsync(`git commit -m "${sanitizedMessage}"`);
+        
+        // Push to remote
+        await execAsync(`git push origin ${branch}`);
+        
+        console.log(`Successfully committed and pushed: ${message}`);
+      } else {
+        console.log('No changes to commit');
+      }
     } catch (error) {
       console.error('Error committing changes:', error);
       throw error;
@@ -444,6 +564,225 @@ Format as professional documentation.`;
     } catch (error) {
       console.error('Error creating PR:', error);
       throw error;
+    }
+  }
+  
+  async waitForWorkflowCompletion(workflowName) {
+    console.log(`Waiting for ${workflowName} workflow to complete...`);
+    
+    const maxWaitTime = 30 * 60 * 1000; // 30 minutes
+    const checkInterval = 30 * 1000; // 30 seconds
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        // Get latest workflow runs
+        const { data: runs } = await this.octokit.request(
+          'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+          {
+            owner: this.owner,
+            repo: this.repo,
+            workflow_id: `${workflowName}.yml`,
+            branch: this.projectBranch,
+            per_page: 1
+          }
+        );
+        
+        if (runs.workflow_runs.length > 0) {
+          const latestRun = runs.workflow_runs[0];
+          
+          if (latestRun.status === 'completed') {
+            if (latestRun.conclusion === 'success') {
+              console.log(`${workflowName} workflow completed successfully`);
+              return;
+            } else {
+              throw new Error(`${workflowName} workflow failed with conclusion: ${latestRun.conclusion}`);
+            }
+          }
+          
+          console.log(`Workflow status: ${latestRun.status}`);
+        }
+      } catch (error) {
+        console.error(`Error checking workflow status: ${error.message}`);
+      }
+      
+      // Wait before checking again
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    throw new Error(`${workflowName} workflow did not complete within ${maxWaitTime / 1000 / 60} minutes`);
+  }
+  
+  async collectWorkflowArtifacts(workflowName) {
+    try {
+      // Get artifacts from the latest workflow run
+      const { data: runs } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: `${workflowName}.yml`,
+          branch: this.projectBranch,
+          per_page: 1
+        }
+      );
+      
+      if (runs.workflow_runs.length === 0) {
+        throw new Error(`No workflow runs found for ${workflowName}`);
+      }
+      
+      const runId = runs.workflow_runs[0].id;
+      
+      // Get artifacts
+      const { data: artifacts } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          run_id: runId
+        }
+      );
+      
+      const results = {};
+      
+      // Download and parse each artifact
+      for (const artifact of artifacts.artifacts) {
+        const { data: download } = await this.octokit.request(
+          'GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}',
+          {
+            owner: this.owner,
+            repo: this.repo,
+            artifact_id: artifact.id,
+            archive_format: 'zip'
+          }
+        );
+        
+        // Download artifact data
+        const artifactData = await this.downloadArtifact(artifact.id);
+        const artifactName = artifact.name.replace('-results', '');
+        results[artifactName] = artifactData;
+      }
+      
+      return results;
+    } catch (error) {
+      console.error('Error collecting artifacts:', error);
+      // Fallback: read from repository
+      return await this.readResultsFromRepo(workflowName);
+    }
+  }
+  
+  async readResultsFromRepo(workflowName) {
+    const results = {};
+    const resultsPath = `${workflowName}/`;
+    
+    try {
+      const { data: contents } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          path: resultsPath,
+          ref: this.projectBranch
+        }
+      );
+      
+      for (const file of contents) {
+        if (file.type === 'file' && file.name.endsWith('.json')) {
+          const { data: fileContent } = await this.octokit.request(
+            'GET /repos/{owner}/{repo}/contents/{path}',
+            {
+              owner: this.owner,
+              repo: this.repo,
+              path: file.path,
+              ref: this.projectBranch
+            }
+          );
+          
+          const content = Buffer.from(fileContent.content, 'base64').toString();
+          const key = file.name.replace('-results.json', '');
+          results[key] = JSON.parse(content);
+        }
+      }
+    } catch (error) {
+      console.error('Error reading results from repo:', error);
+    }
+    
+    return results;
+  }
+  
+  async triggerSingleResearcher(researcher, improvement) {
+    try {
+      // Create improvement task file
+      await this.saveToRepo(
+        `improvements/${researcher}-improvement.md`,
+        improvement,
+        `Improvement task for ${researcher}`
+      );
+      
+      // Trigger single researcher workflow
+      await this.octokit.request(
+        'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: 'research.yml',
+          ref: this.projectBranch,
+          inputs: {
+            researchers: JSON.stringify([researcher]),
+            plan_path: 'plans/final-plan.json',
+            issue_number: String(this.issueNumber),
+            improvement_mode: 'true'
+          }
+        }
+      );
+      
+      // Wait for completion
+      await this.waitForWorkflowCompletion('research');
+    } catch (error) {
+      console.error('Error triggering single researcher:', error);
+    }
+  }
+  
+  async downloadArtifact(artifactId) {
+    try {
+      // Download artifact as zip
+      const { data } = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          artifact_id: artifactId,
+          archive_format: 'zip'
+        }
+      );
+      
+      // Create temporary file
+      const tempFile = `/tmp/artifact-${artifactId}.zip`;
+      await fs.writeFile(tempFile, Buffer.from(data));
+      
+      // Extract zip using command line
+      const extractDir = `/tmp/artifact-${artifactId}`;
+      await execAsync(`mkdir -p ${extractDir} && unzip -o ${tempFile} -d ${extractDir}`);
+      
+      // Read JSON files from extracted directory
+      const files = await fs.readdir(extractDir);
+      const results = {};
+      
+      for (const file of files) {
+        if (file.endsWith('.json')) {
+          const content = await fs.readFile(path.join(extractDir, file), 'utf8');
+          const key = file.replace('.json', '');
+          results[key] = JSON.parse(content);
+        }
+      }
+      
+      // Cleanup
+      await execAsync(`rm -rf ${tempFile} ${extractDir}`);
+      
+      return results;
+    } catch (error) {
+      console.error('Error downloading artifact:', error);
+      return {};
     }
   }
 }
