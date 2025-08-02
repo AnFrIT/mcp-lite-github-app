@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Source files (we only need compiled)
+src/
+*.ts
+tsconfig.json
+
+# Development files
+.env
+.git/
+.gitignore
+README.md
+
+# Logs
+logs/
+*.log
+
+# Local scripts
+setup-git.sh
