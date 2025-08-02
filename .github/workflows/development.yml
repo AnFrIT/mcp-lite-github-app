@@ -84,9 +84,9 @@ jobs:
           if [ -d "src/${{ matrix.component.name }}" ] || [ -f "src/${{ matrix.component.name }}.ts" ]; then
             echo "Component ${{ matrix.component.name }} created successfully"
           else
-            echo "Creating placeholder for ${{ matrix.component.name }}"
-            mkdir -p "src/${{ matrix.component.name }}"
-            echo "// ${{ matrix.component.name }} implementation" > "src/${{ matrix.component.name }}/index.ts"
+            echo "ERROR: Component ${{ matrix.component.name }} was not created by Claude"
+            echo "This indicates a failure in the development process"
+            exit 1
           fi
       
       - name: Run basic tests

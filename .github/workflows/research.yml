@@ -74,9 +74,17 @@ jobs:
       - name: Verify research created
         run: |
           if [ ! -f "research/${{ matrix.researcher }}-results.md" ]; then
-            echo "Creating placeholder for ${{ matrix.researcher }}"
-            echo "# Research by ${{ matrix.researcher }}" > "research/${{ matrix.researcher }}-results.md"
-            echo "Research task completed." >> "research/${{ matrix.researcher }}-results.md"
+            echo "ERROR: Research file for ${{ matrix.researcher }} was not created"
+            echo "This indicates Claude failed to complete the research task"
+            exit 1
+          fi
+          
+          # Verify research has substantial content (more than 100 characters)
+          CONTENT_LENGTH=$(wc -c < "research/${{ matrix.researcher }}-results.md")
+          if [ "$CONTENT_LENGTH" -lt 100 ]; then
+            echo "ERROR: Research file is too small (${CONTENT_LENGTH} bytes)"
+            echo "This indicates incomplete research"
+            exit 1
           fi
       
       - name: Commit research results
