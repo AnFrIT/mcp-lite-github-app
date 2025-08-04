@@ -126,7 +126,7 @@ Rate from 0-100 and return JSON: {"score": NUMBER, "issues": []}`;
         {
           owner: this.owner,
           repo: this.repo,
-          workflow_id: 'research.yml',
+          workflow_id: 'mcp-lite-build.yml',
           ref: this.projectBranch,
           inputs: {
             researchers: JSON.stringify(plan.researchers || ['web-technology-researcher']),
@@ -734,7 +734,7 @@ Format as professional documentation.`;
         {
           owner: this.owner,
           repo: this.repo,
-          workflow_id: 'research.yml',
+          workflow_id: 'mcp-lite-build.yml',
           ref: this.projectBranch,
           inputs: {
             researchers: JSON.stringify([researcher]),
