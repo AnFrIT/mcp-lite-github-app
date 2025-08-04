@@ -413,65 +413,49 @@ Format as professional documentation.`;
   }
   
   async callClaude(prompt) {
-    // Create comment with @claude mention
-    const comment = await this.octokit.issues.createComment({
-      owner: this.owner,
-      repo: this.repo,
-      issue_number: this.issueNumber,
-      body: `@claude ${prompt}`
-    });
+    // Execute Claude command with OAuth token
+    const sanitizedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    const command = `claude "${sanitizedPrompt}"`;
     
-    console.log(`Created @claude comment at ${comment.data.created_at}`);
-    
-    // Wait for Claude's response (polling)
-    let attempts = 0;
-    const maxAttempts = 30; // 5 minutes maximum
-    const pollInterval = 10000; // 10 seconds
-    
-    while (attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-      
-      // Get recent comments
-      const { data: comments } = await this.octokit.issues.listComments({
-        owner: this.owner,
-        repo: this.repo,
-        issue_number: this.issueNumber,
-        since: comment.data.created_at,
-        per_page: 100
+    try {
+      const { stdout, stderr } = await execAsync(command, {
+        env: {
+          ...process.env,
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN
+        },
+        maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large responses
       });
       
-      // Look for Claude's response
-      const claudeResponse = comments.find(c => {
-        // Claude bot might have different usernames
-        const isClaudeBot = c.user.login.includes('claude') || 
-                           c.user.type === 'Bot' && 
-                           (c.user.login.includes('anthropic') || 
-                            c.user.login.includes('claude'));
-        
-        // Must be after our comment
-        const isAfterOurComment = new Date(c.created_at) > new Date(comment.data.created_at);
-        
-        return isClaudeBot && isAfterOurComment;
-      });
-      
-      if (claudeResponse) {
-        console.log(`Got Claude response after ${attempts + 1} attempts`);
-        return claudeResponse.body;
+      if (stderr) {
+        console.error('Claude stderr:', stderr);
       }
       
-      attempts++;
-      console.log(`Waiting for Claude response... (attempt ${attempts}/${maxAttempts})`);
+      return stdout.trim();
+    } catch (error) {
+      console.error('Error calling Claude:', error);
+      throw new Error(`Claude execution failed: ${error.message}`);
     }
-    
-    throw new Error(`Claude did not respond within ${maxAttempts * pollInterval / 1000} seconds`);
   }
   
   async callClaudeWithFiles(prompt, branch) {
-    // Include branch context in the prompt
-    const enhancedPrompt = `[Context: Working on branch '${branch}' in repository ${this.owner}/${this.repo}]\n\n${prompt}`;
-    
-    // Call Claude with enhanced prompt
-    return await this.callClaude(enhancedPrompt);
+    try {
+      // Save current branch
+      const { stdout: currentBranch } = await execAsync('git rev-parse --abbrev-ref HEAD');
+      
+      // Switch to target branch
+      await execAsync(`git checkout ${branch}`);
+      
+      // Call Claude in the context of this branch
+      const result = await this.callClaude(prompt);
+      
+      // Switch back to original branch
+      await execAsync(`git checkout ${currentBranch.trim()}`);
+      
+      return result;
+    } catch (error) {
+      console.error('Error in callClaudeWithFiles:', error);
+      throw error;
+    }
   }
   
   async saveToRepo(filePath, content, message) {
@@ -533,27 +517,34 @@ Format as professional documentation.`;
   }
   
   async commitChanges(message, branch) {
-    // Since we're on Vercel, we can't use git commands
-    // Instead, we'll trigger a GitHub Action to commit changes
-    await this.updateIssue(`📝 Triggering commit: "${message}" on branch ${branch}`);
-    
-    // Trigger GitHub Action workflow for commits
     try {
-      await this.octokit.repos.createDispatchEvent({
-        owner: this.owner,
-        repo: this.repo,
-        event_type: 'commit-changes',
-        client_payload: {
-          branch: branch,
-          message: message,
-          issue_number: this.issueNumber
-        }
-      });
+      // Configure git
+      await execAsync('git config --global user.name "MCP-LITE Bot"');
+      await execAsync('git config --global user.email "bot@mcp-lite.ai"');
       
-      console.log(`Triggered commit workflow for: ${message}`);
-      return `workflow-${Date.now()}`;
+      // Make sure we're on the right branch
+      await execAsync(`git checkout ${branch}`);
+      
+      // Add all changes
+      await execAsync('git add -A');
+      
+      // Check if there are changes to commit
+      const { stdout: status } = await execAsync('git status --porcelain');
+      
+      if (status.trim()) {
+        // Commit changes
+        const sanitizedMessage = message.replace(/"/g, '\\"');
+        await execAsync(`git commit -m "${sanitizedMessage}"`);
+        
+        // Push to remote
+        await execAsync(`git push origin ${branch}`);
+        
+        console.log(`Successfully committed and pushed: ${message}`);
+      } else {
+        console.log('No changes to commit');
+      }
     } catch (error) {
-      console.error('Error triggering commit workflow:', error);
+      console.error('Error committing changes:', error);
       throw error;
     }
   }
@@ -792,70 +783,6 @@ Format as professional documentation.`;
     } catch (error) {
       console.error('Error downloading artifact:', error);
       return {};
-    }
-  }
-  
-  async logToVectorDB(type, data) {
-    // Save to GitHub repository as vector database
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `${type}-${this.issueNumber}-${timestamp}.json`;
-    const filePath = `vectordb/${type}/${fileName}`;
-    
-    const content = {
-      timestamp: new Date().toISOString(),
-      issue: this.issueNumber,
-      repository: `${this.owner}/${this.repo}`,
-      type,
-      data,
-      metadata: {
-        quality: data.quality || 'N/A',
-        summary: data.summary || 'No summary',
-        tags: data.tags || []
-      }
-    };
-    
-    try {
-      // Ensure vectordb branch exists
-      try {
-        await this.octokit.repos.getBranch({
-          owner: this.owner,
-          repo: this.repo,
-          branch: 'vectordb'
-        });
-      } catch (e) {
-        // Create vectordb branch if it doesn't exist
-        const { data: defaultBranch } = await this.octokit.repos.get({
-          owner: this.owner,
-          repo: this.repo
-        });
-        
-        const { data: ref } = await this.octokit.git.getRef({
-          owner: this.owner,
-          repo: this.repo,
-          ref: `heads/${defaultBranch.default_branch}`
-        });
-        
-        await this.octokit.git.createRef({
-          owner: this.owner,
-          repo: this.repo,
-          ref: 'refs/heads/vectordb',
-          sha: ref.object.sha
-        });
-      }
-      
-      // Save pattern to vectordb
-      await this.octokit.repos.createOrUpdateFileContents({
-        owner: this.owner,
-        repo: this.repo,
-        path: filePath,
-        message: `Add ${type} pattern from issue #${this.issueNumber}`,
-        content: Buffer.from(JSON.stringify(content, null, 2)).toString('base64'),
-        branch: 'vectordb'
-      });
-      
-      console.log(`[VectorDB] Saved ${type} pattern to ${filePath}`);
-    } catch (error) {
-      console.error('[VectorDB] Error saving pattern:', error);
     }
   }
 }
